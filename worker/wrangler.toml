@@ -1,0 +1,14 @@
+name = "omegapair-api"
+main = "src/index.js"
+compatibility_date = "2025-06-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "omegapair-db"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+
+[vars]
+FRONTEND_ORIGIN = "https://REPLACE-WITH-YOUR-PAGES-DOMAIN.pages.dev"
+
+# Secrets (do NOT put these here — set via CLI, see README):
+#   wrangler secret put SESSION_SECRET
