@@ -1,20 +1,16 @@
--- ΩPair D1 schema
+-- ΩPair schema v3: friends + post visibility
 
-CREATE TABLE IF NOT EXISTS users (
+CREATE TABLE IF NOT EXISTS friendships (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  public_key TEXT NOT NULL UNIQUE,   -- 64-char hex, Ed25519 public key
-  jing_x REAL NOT NULL,
-  jing_y REAL NOT NULL,
-  jing_z REAL NOT NULL,
-  created_at INTEGER NOT NULL,       -- unix ms
-  last_login_at INTEGER NOT NULL
+  requester_id INTEGER NOT NULL,
+  addressee_id INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',  -- 'pending' | 'accepted' | 'declined'
+  created_at INTEGER NOT NULL,
+  responded_at INTEGER,
+  FOREIGN KEY (requester_id) REFERENCES identities(id),
+  FOREIGN KEY (addressee_id) REFERENCES identities(id)
 );
+CREATE INDEX IF NOT EXISTS idx_friendships_requester ON friendships (requester_id, status);
+CREATE INDEX IF NOT EXISTS idx_friendships_addressee ON friendships (addressee_id, status);
 
-CREATE TABLE IF NOT EXISTS nonces (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  public_key TEXT NOT NULL,
-  nonce TEXT NOT NULL,
-  expires_at INTEGER NOT NULL        -- unix ms
-);
-
-CREATE INDEX IF NOT EXISTS idx_nonces_lookup ON nonces (public_key, nonce);
+ALTER TABLE posts ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public';
