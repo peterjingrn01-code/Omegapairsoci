@@ -182,6 +182,9 @@ export default {
       if (url.pathname === "/api/friends/requests" && request.method === "GET") {
         return await handleFriendRequestsList(request, env, origin);
       }
+      if (url.pathname === "/api/profile/handle" && request.method === "POST") {
+        return await handleUpdateHandle(request, env, origin);
+      }
       return json({ error: "Not found" }, 404, origin);
     } catch (err) {
       return json({ error: err.message || "Internal error" }, 500, origin);
@@ -496,4 +499,29 @@ async function handleFriendRequestsList(request, env, origin) {
   ).bind(identity.id).all();
 
   return json({ requests: results }, 200, origin);
+}
+
+async function handleUpdateHandle(request, env, origin) {
+  const identity = await getSession(request, env);
+  if (!identity) return json({ error: "Login required." }, 401, origin);
+
+  const { handle: rawHandle } = await request.json();
+  const handle = String(rawHandle || "").trim();
+
+  if (!/^[a-zA-Z0-9._-]{3,20}$/.test(handle)) {
+    return json({ error: "Username must be 3-20 characters: letters, numbers, dots, underscores, or hyphens only." }, 400, origin);
+  }
+
+  const existing = await env.DB.prepare(
+    "SELECT id FROM identities WHERE handle = ? AND id != ?"
+  ).bind(handle, identity.id).first();
+  if (existing) {
+    return json({ error: "That username is already taken." }, 409, origin);
+  }
+
+  await env.DB.prepare(
+    "UPDATE identities SET handle = ? WHERE id = ?"
+  ).bind(handle, identity.id).run();
+
+  return json({ handle }, 200, origin);
 }
