@@ -508,8 +508,8 @@ async function handleUpdateHandle(request, env, origin) {
   const { handle: rawHandle } = await request.json();
   const handle = String(rawHandle || "").trim();
 
-  if (!/^[a-zA-Z0-9._-]{3,20}$/.test(handle)) {
-    return json({ error: "Username must be 3-20 characters: letters, numbers, dots, underscores, or hyphens only." }, 400, origin);
+  if (!/^[\p{L}\p{N}._-]{2,20}$/u.test(handle)) {
+    return json({ error: "Username must be 2-20 characters: letters (any language), numbers, dots, underscores, or hyphens only." }, 400, origin);
   }
 
   const existing = await env.DB.prepare(
