@@ -1,54 +1,38 @@
-# ΩPair v3 — Friends System Update
+# ΩPair — Edit Username Update
 
-This package contains everything needed to add the friend request system
-and post visibility (public / friends-only) to your existing ΩPair app.
+This update adds the ability for users to change their display username
+(handle), plus keeps the "remember login" feature from before.
 
 ## What's inside
 
 ```
-index.html          ← new frontend, replaces the one on GitHub
-worker/index.js      ← new backend, replaces the code in your Cloudflare Worker
-worker/schema.sql     ← new database tables to run in D1
+index.html        ← new frontend, replaces the one on GitHub
+worker-index.js    ← new backend, replaces the code in your Cloudflare Worker
 ```
+
+No database changes needed this time — the `identities` table already
+has a `handle` column, this just adds a way to update it.
 
 ## Deploy in this order
 
-### 1. Database (D1 Console)
+### 1. Backend (Cloudflare Worker)
 
-Open Cloudflare → D1 → your `omega` database → **Console**, and run the
-contents of `worker/schema.sql`. This only *adds* new tables and a new
-column — it does not delete any existing data.
+Workers & Pages → `omegapair-api` → **Edit code** → select all, delete,
+paste in `worker-index.js` → **Deploy**.
 
-### 2. Backend (Cloudflare Worker)
+### 2. Frontend (GitHub)
 
-Open Cloudflare → Workers & Pages → `omegapair-api` → **Edit code**.
-Select all the existing code, delete it, and paste in the full contents
-of `worker/index.js`. Then click **Deploy**.
+Rename `index.html` if needed, then on GitHub: **Add file → Upload
+files** → select it → confirm replacing the existing file → **Commit
+changes**.
 
-### 3. Frontend (GitHub)
+## What's new
 
-- Rename `index.html` in this package if needed (it should already be
-  named `index.html`).
-- On GitHub, open your repo → **Add file → Upload files** → select this
-  `index.html` → confirm you want to replace the existing file →
-  **Commit changes**.
-
-GitHub Pages will redeploy automatically after the commit (usually within
-a minute or two).
-
-## What's new for users
-
-- A **Friends** button next to Log out, opening a panel to:
-  - search for someone by their handle and send a friend request
-  - accept or decline incoming requests
-  - see your current friends list
-- A **Public / Friends** toggle on the post composer — friends-only posts
-  are only visible to you and people you're mutually connected with.
-
-## Notes
-
-- Friend requests are matched by exact `handle` (the @name shown under
-  each post). If two people happen to have the same handle, requests
-  could go to either — this is a known limitation of the current design
-  and can be tightened later (e.g. matching by full public key/email
-  instead of handle) if it becomes a real problem.
+- A small ✎ pencil icon next to your username in the top bar. Click it,
+  type a new username (3-20 characters: letters, numbers, dots,
+  underscores, or hyphens), click **Save**.
+- Usernames must be unique — if someone already has it, you'll see an
+  error and can pick another.
+- Changing your username only affects new posts going forward — posts
+  you already made will still show your old username underneath them.
+  This is normal behavior (most social platforms work this way).

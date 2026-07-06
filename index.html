@@ -194,7 +194,15 @@
     </div>
     <div class="profileRow">
       <div class="profileMeta">
-        <div class="profileHandle" id="profileHandle"></div>
+        <div style="display:flex;align-items:center;gap:6px;justify-content:flex-end;">
+          <div class="profileHandle" id="profileHandle"></div>
+          <button id="editHandleBtn" title="Edit username" style="background:transparent;border:none;color:var(--subtext);font-size:12px;padding:0;cursor:pointer;">✎</button>
+        </div>
+        <div id="handleEditBox" class="hidden" style="display:flex;gap:6px;margin-top:4px;justify-content:flex-end;">
+          <input type="text" id="handleEditInput" placeholder="new-username" style="width:120px;background:var(--bg);border:1px solid var(--line);border-radius:3px;padding:5px 7px;color:var(--text);font-size:12px;" />
+          <button id="saveHandleBtn" style="background:var(--accent);color:#04201C;border:none;border-radius:3px;padding:5px 8px;font-size:11px;">Save</button>
+        </div>
+        <div id="handleEditStatus" style="font-size:11px;margin-top:3px;text-align:right;"></div>
         <div class="mono postCoordRow" id="profileCoord"></div>
       </div>
       <button id="friendsBtn" style="background:transparent;border:1px solid var(--line);color:var(--text);border-radius:3px;padding:7px 13px;font-size:12px;margin-right:8px;">Friends</button>
@@ -526,12 +534,50 @@ function enterApp() {
     ? `j⟨${session.coord.x}, ${session.coord.y}, ${session.coord.z}⟩`
     : "";
   document.getElementById("composerHint").textContent = "Signed via " + session.method;
+  try {
+    localStorage.setItem("omegapair_session", JSON.stringify({
+      token: session.token,
+      coord: session.coord,
+      method: session.method,
+      handleOverride: session.handleOverride || null,
+      publicKeyHex: session.publicKeyHex || null,
+    }));
+  } catch (e) { /* localStorage unavailable — session just won't persist across reloads */ }
   loadFeed();
 }
+
+async function tryRestoreSession() {
+  let saved;
+  try {
+    const raw = localStorage.getItem("omegapair_session");
+    if (!raw) return;
+    saved = JSON.parse(raw);
+  } catch (e) { return; }
+  if (!saved || !saved.token) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/me`, {
+      headers: { Authorization: `Bearer ${saved.token}` },
+    });
+    if (!res.ok) throw new Error("expired");
+    session = {
+      token: saved.token,
+      coord: saved.coord,
+      method: saved.method,
+      handleOverride: saved.handleOverride,
+      publicKeyHex: saved.publicKeyHex,
+    };
+    enterApp();
+  } catch (e) {
+    localStorage.removeItem("omegapair_session");
+  }
+}
+tryRestoreSession();
 
 document.getElementById("logoutBtn").addEventListener("click", () => {
   session = null;
   currentKeyPair = null;
+  try { localStorage.removeItem("omegapair_session"); } catch (e) {}
   document.getElementById("appWrap").classList.remove("active");
   document.getElementById("loginWrap").style.display = "flex";
   document.getElementById("walletChooser").classList.remove("hidden");
@@ -759,6 +805,49 @@ document.getElementById("sendFriendRequestBtn").addEventListener("click", async 
     if (!res.ok) throw new Error(data.error || "Could not send request.");
     statusEl.innerHTML = `<span style="color:var(--accent);">Request sent to @${handle}.</span>`;
     document.getElementById("friendSearchInput").value = "";
+  } catch (e) {
+    statusEl.innerHTML = `<span class="errorText">${e.message}</span>`;
+  }
+});
+
+// ---- edit username ----
+document.getElementById("editHandleBtn").addEventListener("click", () => {
+  const box = document.getElementById("handleEditBox");
+  const isHidden = box.classList.contains("hidden");
+  box.classList.toggle("hidden");
+  if (isHidden) {
+    const current = document.getElementById("profileHandle").textContent.replace(/^@/, "");
+    document.getElementById("handleEditInput").value = current;
+    document.getElementById("handleEditStatus").innerHTML = "";
+  }
+});
+
+document.getElementById("saveHandleBtn").addEventListener("click", async () => {
+  const newHandle = document.getElementById("handleEditInput").value.trim();
+  const statusEl = document.getElementById("handleEditStatus");
+  statusEl.innerHTML = "";
+  if (!newHandle) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/profile/handle`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ handle: newHandle }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Could not update username.");
+
+    document.getElementById("profileHandle").textContent = "@" + data.handle;
+    session.handleOverride = data.handle;
+    try {
+      const raw = localStorage.getItem("omegapair_session");
+      if (raw) {
+        const saved = JSON.parse(raw);
+        saved.handleOverride = data.handle;
+        localStorage.setItem("omegapair_session", JSON.stringify(saved));
+      }
+    } catch (e) {}
+
+    document.getElementById("handleEditBox").classList.add("hidden");
   } catch (e) {
     statusEl.innerHTML = `<span class="errorText">${e.message}</span>`;
   }
