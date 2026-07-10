@@ -185,6 +185,24 @@ export default {
       if (url.pathname === "/api/profile/handle" && request.method === "POST") {
         return await handleUpdateHandle(request, env, origin);
       }
+      if (url.pathname === "/api/profile/pair" && request.method === "POST") {
+        return await handleSetPair(request, env, origin);
+      }
+      if (url.pathname === "/api/ledger/genesis" && request.method === "POST") {
+        return await handleGenesis(request, env, origin);
+      }
+      if (url.pathname === "/api/ledger/distribute" && request.method === "POST") {
+        return await handleDistribute(request, env, origin);
+      }
+      if (url.pathname === "/api/ledger/balance" && request.method === "GET") {
+        return await handleBalance(request, env, origin);
+      }
+      if (url.pathname === "/api/ledger/history" && request.method === "GET") {
+        return await handleLedgerHistory(request, env, origin);
+      }
+      if (url.pathname === "/api/ledger/chain" && request.method === "GET") {
+        return await handleLedgerChain(request, env, origin, url);
+      }
       return json({ error: "Not found" }, 404, origin);
     } catch (err) {
       return json({ error: err.message || "Internal error" }, 500, origin);
@@ -508,8 +526,8 @@ async function handleUpdateHandle(request, env, origin) {
   const { handle: rawHandle } = await request.json();
   const handle = String(rawHandle || "").trim();
 
-  if (!/^[a-zA-Z0-9._-]{3,20}$/.test(handle)) {
-    return json({ error: "Username must be 3-20 characters: letters, numbers, dots, underscores, or hyphens only." }, 400, origin);
+  if (!/^[\p{L}\p{N}._-]{2,20}$/u.test(handle)) {
+    return json({ error: "Username must be 2-20 characters: letters (any language), numbers, dots, underscores, or hyphens only." }, 400, origin);
   }
 
   const existing = await env.DB.prepare(
@@ -524,4 +542,145 @@ async function handleUpdateHandle(request, env, origin) {
   ).bind(handle, identity.id).run();
 
   return json({ handle }, 200, origin);
+}
+
+// ---------------- OmegaPair Token (OPT) ledger ----------------
+
+const GENESIS_SUPPLY = 1000000000; // 1B OPT
+
+async function sha256Hex(str) {
+  const bytes = new TextEncoder().encode(str);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return bytesToHex(new Uint8Array(digest));
+}
+
+// Ω₀ = hash(username, email, phone) — the "proof of pair" identity anchor.
+async function handleSetPair(request, env, origin) {
+  const identity = await getSession(request, env);
+  if (!identity) return json({ error: "Login required." }, 401, origin);
+
+  const { email, phone } = await request.json();
+  const cleanEmail = normalizeEmail(email);
+  const cleanPhone = String(phone || "").replace(/[^\d+]/g, "");
+
+  if (!isValidEmail(cleanEmail)) return json({ error: "Enter a valid email." }, 400, origin);
+  if (cleanPhone.length < 7) return json({ error: "Enter a valid phone number." }, 400, origin);
+
+  const pairHash = await sha256Hex(`${identity.handle}|${cleanEmail}|${cleanPhone}`);
+
+  await env.DB.prepare(
+    "UPDATE identities SET profile_email = ?, profile_phone = ?, pair_hash = ? WHERE id = ?"
+  ).bind(cleanEmail, cleanPhone, pairHash, identity.id).run();
+
+  return json({ pairHash }, 200, origin);
+}
+
+// One-time genesis mint: whoever calls this first becomes the treasury and
+// receives the full 1B OPT supply as ledger entry Ω₀. Cannot be called again.
+async function handleGenesis(request, env, origin) {
+  const identity = await getSession(request, env);
+  if (!identity) return json({ error: "Login required." }, 401, origin);
+
+  const existing = await env.DB.prepare("SELECT id FROM ledger WHERE seq = 0").first();
+  if (existing) return json({ error: "Genesis has already occurred." }, 409, origin);
+
+  const createdAt = Date.now();
+  const entryHash = await sha256Hex(`0|null|null|${identity.id}|${GENESIS_SUPPLY}|${createdAt}|Genesis`);
+
+  await env.DB.prepare(
+    `INSERT INTO ledger (seq, prev_hash, entry_hash, from_identity_id, to_identity_id, amount, memo, created_at)
+     VALUES (0, NULL, ?, NULL, ?, ?, 'Genesis', ?)`
+  ).bind(entryHash, identity.id, GENESIS_SUPPLY, createdAt).run();
+
+  await env.DB.prepare(
+    `INSERT INTO balances (identity_id, balance) VALUES (?, ?)
+     ON CONFLICT(identity_id) DO UPDATE SET balance = balance + excluded.balance`
+  ).bind(identity.id, GENESIS_SUPPLY).run();
+
+  return json({ ok: true, seq: 0, entryHash, amount: GENESIS_SUPPLY }, 200, origin);
+}
+
+// Treasury (the identity that ran genesis) sends OPT to another user by handle.
+async function handleDistribute(request, env, origin) {
+  const identity = await getSession(request, env);
+  if (!identity) return json({ error: "Login required." }, 401, origin);
+
+  const genesisRow = await env.DB.prepare("SELECT to_identity_id FROM ledger WHERE seq = 0").first();
+  if (!genesisRow) return json({ error: "Genesis has not occurred yet." }, 400, origin);
+  if (genesisRow.to_identity_id !== identity.id) {
+    return json({ error: "Only the treasury account can distribute OPT." }, 403, origin);
+  }
+
+  const { toHandle, amount, memo } = await request.json();
+  const amt = Math.floor(Number(amount));
+  if (!amt || amt <= 0) return json({ error: "Amount must be a positive whole number." }, 400, origin);
+
+  const target = await env.DB.prepare("SELECT id FROM identities WHERE handle = ?").bind(String(toHandle || "").trim()).first();
+  if (!target) return json({ error: "No user found with that handle." }, 404, origin);
+
+  const senderBal = await env.DB.prepare("SELECT balance FROM balances WHERE identity_id = ?").bind(identity.id).first();
+  const currentBalance = senderBal ? senderBal.balance : 0;
+  if (currentBalance < amt) return json({ error: "Insufficient treasury balance." }, 400, origin);
+
+  const lastEntry = await env.DB.prepare("SELECT seq, entry_hash FROM ledger ORDER BY seq DESC LIMIT 1").first();
+  const nextSeq = lastEntry.seq + 1;
+  const createdAt = Date.now();
+  const entryHash = await sha256Hex(`${nextSeq}|${lastEntry.entry_hash}|${identity.id}|${target.id}|${amt}|${createdAt}|${memo || ""}`);
+
+  await env.DB.prepare(
+    `INSERT INTO ledger (seq, prev_hash, entry_hash, from_identity_id, to_identity_id, amount, memo, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(nextSeq, lastEntry.entry_hash, entryHash, identity.id, target.id, amt, memo || null, createdAt).run();
+
+  await env.DB.prepare(
+    "UPDATE balances SET balance = balance - ? WHERE identity_id = ?"
+  ).bind(amt, identity.id).run();
+  await env.DB.prepare(
+    `INSERT INTO balances (identity_id, balance) VALUES (?, ?)
+     ON CONFLICT(identity_id) DO UPDATE SET balance = balance + excluded.balance`
+  ).bind(target.id, amt).run();
+
+  return json({ ok: true, seq: nextSeq, entryHash, amount: amt }, 200, origin);
+}
+
+async function handleBalance(request, env, origin) {
+  const identity = await getSession(request, env);
+  if (!identity) return json({ error: "Login required." }, 401, origin);
+
+  const row = await env.DB.prepare("SELECT balance FROM balances WHERE identity_id = ?").bind(identity.id).first();
+  const genesisRow = await env.DB.prepare("SELECT to_identity_id FROM ledger WHERE seq = 0").first();
+  const isTreasury = genesisRow ? genesisRow.to_identity_id === identity.id : false;
+
+  return json({ balance: row ? row.balance : 0, isTreasury, genesisOccurred: !!genesisRow }, 200, origin);
+}
+
+async function handleLedgerHistory(request, env, origin) {
+  const identity = await getSession(request, env);
+  if (!identity) return json({ error: "Login required." }, 401, origin);
+
+  const { results } = await env.DB.prepare(
+    `SELECT l.seq, l.amount, l.memo, l.created_at,
+            fi.handle as from_handle, ti.handle as to_handle
+     FROM ledger l
+     LEFT JOIN identities fi ON fi.id = l.from_identity_id
+     JOIN identities ti ON ti.id = l.to_identity_id
+     WHERE l.from_identity_id = ? OR l.to_identity_id = ?
+     ORDER BY l.seq DESC LIMIT 50`
+  ).bind(identity.id, identity.id).all();
+
+  return json({ history: results }, 200, origin);
+}
+
+async function handleLedgerChain(request, env, origin, url) {
+  const limit = Math.min(Number(url.searchParams.get("limit")) || 20, 100);
+  const { results } = await env.DB.prepare(
+    `SELECT l.seq, l.prev_hash, l.entry_hash, l.amount, l.memo, l.created_at,
+            fi.handle as from_handle, ti.handle as to_handle
+     FROM ledger l
+     LEFT JOIN identities fi ON fi.id = l.from_identity_id
+     JOIN identities ti ON ti.id = l.to_identity_id
+     ORDER BY l.seq DESC LIMIT ?`
+  ).bind(limit).all();
+
+  return json({ chain: results }, 200, origin);
 }
