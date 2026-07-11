@@ -607,9 +607,6 @@ async function handleDistribute(request, env, origin) {
 
   const genesisRow = await env.DB.prepare("SELECT to_identity_id FROM ledger WHERE seq = 0").first();
   if (!genesisRow) return json({ error: "Genesis has not occurred yet." }, 400, origin);
-  if (genesisRow.to_identity_id !== identity.id) {
-    return json({ error: "Only the treasury account can distribute OPT." }, 403, origin);
-  }
 
   const { toHandle, amount, memo } = await request.json();
   const amt = Math.floor(Number(amount));
@@ -617,6 +614,7 @@ async function handleDistribute(request, env, origin) {
 
   const target = await env.DB.prepare("SELECT id FROM identities WHERE handle = ?").bind(String(toHandle || "").trim()).first();
   if (!target) return json({ error: "No user found with that handle." }, 404, origin);
+  if (target.id === identity.id) return json({ error: "You can't send OPT to yourself." }, 400, origin);
 
   const senderBal = await env.DB.prepare("SELECT balance FROM balances WHERE identity_id = ?").bind(identity.id).first();
   const currentBalance = senderBal ? senderBal.balance : 0;
